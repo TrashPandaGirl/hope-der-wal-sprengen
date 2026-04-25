@@ -122,6 +122,7 @@
   <div id="ui">
     <div id="charge-label">Ladung: 0%</div>
     <div id="charge-bar-wrap"><div id="charge-bar"></div></div>
+    <button id="btn-mute" class="shop-btn" title="Ton an/aus">🔊</button>
   </div>
   <div id="stats">
     <span id="stat-explosions">💥 0</span>
@@ -1003,6 +1004,12 @@ btnFence.addEventListener('click',()=>{
 btnPolitician.addEventListener('click',()=>{
   if(politiciansAvailable<=0||politician||state!=='swimming') return;
   spawnPolitician();
+});
+
+document.getElementById('btn-mute').addEventListener('click',()=>{
+  const btn = document.getElementById('btn-mute');
+  if(audio.state==='suspended'){ audio.resume(); btn.textContent='🔊'; }
+  else { audio.suspend(); btn.textContent='🔇'; }
 });
 
 // ── Difficulty screen ────────────────────────────────────────────────────────
