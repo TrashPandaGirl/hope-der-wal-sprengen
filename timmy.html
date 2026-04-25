@@ -21,13 +21,33 @@
     #canvas { border: 2px solid #00cfff44; border-radius: 16px; cursor: crosshair; box-shadow: 0 0 40px #00cfff22; max-width: 100%; touch-action: none; }
     #game-wrap { display: flex; flex-direction: column; align-items: center; width: 100%; max-width: 724px; padding: 0 6px; }
     @media (max-width: 740px) {
-      h1 { font-size: 1.1rem; margin-bottom: 6px; }
-      #canvas { width: 100%; height: auto; }
-      .shop-btn { padding: 8px 14px; font-size: 0.8rem; }
-      #stats { font-size: 0.72rem; gap: 10px; flex-wrap: wrap; justify-content: center; }
-      #shop { gap: 8px; }
+      body { justify-content: flex-start; padding-top: 6px; }
+      h1 { font-size: 0.95rem; margin-bottom: 4px; letter-spacing: 1px; }
+      /* canvas fills available height after compact UI (~78px) */
+      #canvas {
+        width: min(100vw, calc((100svh - 78px) * 720 / 410));
+        height: auto;
+      }
+      #ui { margin-top: 5px; gap: 10px; }
+      #charge-bar-wrap { width: 180px; height: 16px; }
+      #charge-label { font-size: 0.75rem; min-width: 76px; }
+      #stats { font-size: 0.68rem; gap: 8px; margin-top: 3px; }
+      #shop { margin-top: 4px; gap: 6px; }
+      #stat-coins { font-size: 0.75rem; }
+      .shop-btn { padding: 6px 12px; font-size: 0.72rem; }
+      #placement-hint { min-height: 10px; font-size: 0.62rem; }
       .diff-btns { flex-direction: column; gap: 10px; }
       .diff-btn { min-width: 220px; padding: 14px 24px; }
+    }
+    @media (max-width: 740px) and (orientation: landscape) {
+      body { justify-content: center; padding-top: 0; }
+      #canvas {
+        height: calc(100svh - 60px);
+        width: auto;
+        max-width: 100vw;
+      }
+      h1 { display: none; }
+      #stats { margin-top: 2px; }
     }
     #ui { margin-top: 12px; display: flex; align-items: center; gap: 20px; }
     #charge-bar-wrap { width: 260px; height: 20px; background: #111; border: 2px solid #ff4400aa; border-radius: 10px; overflow: hidden; }
