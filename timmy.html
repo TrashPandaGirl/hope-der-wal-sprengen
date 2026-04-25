@@ -1,0 +1,920 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8">
+  <title>Timmy den Wal sprengen 💥</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      background: #0a0a1a;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+      font-family: 'Courier New', monospace;
+      overflow: hidden;
+      user-select: none;
+    }
+    h1 { color: #00cfff; font-size: 1.8rem; margin-bottom: 10px; text-shadow: 0 0 20px #00cfff88; letter-spacing: 2px; }
+    #canvas { border: 2px solid #00cfff44; border-radius: 16px; cursor: crosshair; box-shadow: 0 0 40px #00cfff22; }
+    #ui { margin-top: 12px; display: flex; align-items: center; gap: 20px; }
+    #charge-bar-wrap { width: 260px; height: 20px; background: #111; border: 2px solid #ff4400aa; border-radius: 10px; overflow: hidden; }
+    #charge-bar { height: 100%; width: 0%; background: linear-gradient(90deg,#ff4400,#ffcc00); border-radius: 10px; transition: width 0.05s; box-shadow: 0 0 8px #ff4400; }
+    #charge-label { color: #ffcc00; font-size: 0.85rem; min-width: 96px; }
+    #stats { color: #aaa; font-size: 0.78rem; margin-top: 6px; display: flex; gap: 18px; }
+    #shop { margin-top: 7px; display: flex; align-items: center; gap: 12px; flex-wrap: wrap; justify-content: center; }
+    #stat-coins { color: #ffd700; font-size: 0.85rem; min-width: 60px; }
+    .shop-btn {
+      background: #111a11; color: #88dd88; border: 1px solid #3a6a3a;
+      border-radius: 6px; padding: 4px 11px; font-family: 'Courier New',monospace;
+      font-size: 0.75rem; cursor: pointer; transition: background 0.15s;
+    }
+    .shop-btn:disabled { color: #334; border-color: #223; cursor: not-allowed; opacity: 0.45; }
+    .shop-btn:not(:disabled):hover { background: #1a3a1a; }
+    .shop-btn.active { background: #1a3a1a; border-color: #66bb66; color: #ccffcc; }
+    #placement-hint { color: #ffcc66; font-size: 0.7rem; margin-top: 4px; min-height: 14px; }
+    #msg {
+      position: absolute; top: 50%; left: 50%; transform: translate(-50%,-50%);
+      font-size: 3.2rem; font-weight: bold; color: #fff;
+      text-shadow: 0 0 30px #ff4400, 0 0 60px #ff4400;
+      pointer-events: none; opacity: 0; white-space: nowrap;
+    }
+  </style>
+</head>
+<body>
+  <h1>🐋 TIMMY DEN WAL SPRENGEN</h1>
+  <canvas id="canvas" width="720" height="410"></canvas>
+  <div id="ui">
+    <div id="charge-label">Ladung: 0%</div>
+    <div id="charge-bar-wrap"><div id="charge-bar"></div></div>
+  </div>
+  <div id="stats">
+    <span id="stat-explosions">💥 0</span>
+    <span id="stat-healers">🏃 0 weggejagt</span>
+    <span id="stat-wave">🌊 Welle 1</span>
+  </div>
+  <div id="shop">
+    <span id="stat-coins">🪙 0</span>
+    <button id="btn-fence"     class="shop-btn" disabled>🚧 Bauzaun kaufen (10🪙)</button>
+    <button id="btn-politician" class="shop-btn" disabled>🎩 Politiker einsetzen (0 verfügbar)</button>
+  </div>
+  <div id="placement-hint"></div>
+  <div id="msg">💥 BOOM! 💥</div>
+
+<script>
+const canvas   = document.getElementById('canvas');
+const ctx      = canvas.getContext('2d');
+const chargeBar      = document.getElementById('charge-bar');
+const chargeLabel    = document.getElementById('charge-label');
+const statExp        = document.getElementById('stat-explosions');
+const statHeal       = document.getElementById('stat-healers');
+const statWaveEl     = document.getElementById('stat-wave');
+const statCoins      = document.getElementById('stat-coins');
+const btnFence       = document.getElementById('btn-fence');
+const btnPolitician  = document.getElementById('btn-politician');
+const placementHint  = document.getElementById('placement-hint');
+const msgEl          = document.getElementById('msg');
+
+const W = canvas.width, H = canvas.height;
+
+// ── Core state ──────────────────────────────────────────────────────────────
+let charge = 0, state = 'swimming';
+let explosions = 0, healersKicked = 0, wave = 1;
+let coins = 0;
+const COINS_PER_EXPLOSION = 3;
+const FENCE_COST = 10;
+const POL_EVERY_N  = 10; // politician every N explosions
+
+// Arrays
+let particles = [], healParticles = [], bubbles = [], clickFlashes = [];
+let fences   = [];   // [{x,y}]
+let healers  = [];
+let politician = null;
+let politiciansAvailable = 0;
+
+let shakeX = 0, shakeY = 0, msgAlpha = 0, reformTimer = 0, frameCount = 0;
+let healerSpawnTimer = 0, healerSpawnInterval = 110;
+
+// Placement mode
+let placingFence = false;
+let mouseX = -999, mouseY = -999;
+
+const FENCE_W = 100, FENCE_H = 22, FENCE_PAD = 18;
+const FENCE_SLOW = 0.28;
+
+// ── Timmy ───────────────────────────────────────────────────────────────────
+const timmy = { x: W/2, y: H/2, vx: 1.6, vy: 0.7, angle: 0, scale: 1, blinkT: 0, healFlash: 0 };
+
+// ── Audio ────────────────────────────────────────────────────────────────────
+const audio = new (window.AudioContext || window.webkitAudioContext)();
+function tone(f1,f2,dur,vol,type='sine'){
+  const o=audio.createOscillator(),g=audio.createGain();
+  o.type=type; o.connect(g); g.connect(audio.destination);
+  o.frequency.setValueAtTime(f1,audio.currentTime);
+  o.frequency.exponentialRampToValueAtTime(f2,audio.currentTime+dur);
+  g.gain.setValueAtTime(vol,audio.currentTime);
+  g.gain.exponentialRampToValueAtTime(0.001,audio.currentTime+dur+0.02);
+  o.start(); o.stop(audio.currentTime+dur+0.05);
+}
+function playClick()     { tone(300+charge*8, 80,  0.10, 0.15, 'sine'); }
+function playStun()      { tone(600,          150, 0.18, 0.09, 'square'); }
+function playHealTick()  { tone(660,          880, 0.08, 0.04, 'sine'); }
+function playHit()       { tone(380,          180, 0.13, 0.07, 'square'); }
+function playPolDeath()  { tone(300, 60, 0.4, 0.1, 'sawtooth'); }
+function playExplosion() {
+  for(let i=0;i<4;i++){
+    const o=audio.createOscillator(),g=audio.createGain(),f=audio.createBiquadFilter();
+    f.type='lowpass';f.frequency.value=800;o.type='sawtooth';
+    o.connect(f);f.connect(g);g.connect(audio.destination);
+    const t=audio.currentTime+i*0.07;
+    o.frequency.setValueAtTime(200-i*30,t); o.frequency.exponentialRampToValueAtTime(20,t+0.4);
+    g.gain.setValueAtTime(0.3,t); g.gain.exponentialRampToValueAtTime(0.001,t+0.4);
+    o.start(t); o.stop(t+0.4);
+  }
+}
+
+// ── NPC data ─────────────────────────────────────────────────────────────────
+const femaleNames   = ['Brigitte','Waltraud','Margit','Renate','Hildegard','Irmgard','Gertrude'];
+const maleNames     = ['Günter','Helmut','Rainer','Werner','Dieter','Manfred','Klaus'];
+const healPhrases   = ['Rettet den Wal!','Du Monster!','Lass Timmy in Ruhe!','WWF ist mit uns!','Timmy ist unschuldig!','Umweltsünder!','Schäm dich!','Hände weg von Timmy!'];
+const stunPhrases   = ['Aua!','Mein Rücken!','Das gibt\'s nicht!','Hilfe!','Ooooh!','Ow ow ow!'];
+const polSpeech     = ['Das muss geprüft werden!','Wir brauchen eine Taskforce!','Das Budget ist gesperrt!','Ich leite eine AG ein!','Das ist nicht normkonform!','Steuern werden erhöht!','Bitte nehmen Sie Platz.'];
+const polHitSpeech  = ['Das ist Körperverletzung!','Mein Anwalt!','Ich bin gewählt!','Das kostet Sie was!','Unglaublich!'];
+const confusedTexts = ['Was?!','Unerhört!','Skandal!','Das glaub ich nicht!','Wie bitte?!'];
+const glassWearers  = new Set(['Brigitte','Helmut','Renate','Manfred','Irmgard']);
+
+function say(npc, text) { npc.speechText = text; npc.speechTimer = 115; }
+
+// ── Fence helpers ─────────────────────────────────────────────────────────────
+function isInFence(x, y) {
+  const hw = FENCE_W/2 + FENCE_PAD, hh = FENCE_H/2 + FENCE_PAD;
+  return fences.some(f => x>=f.x-hw && x<=f.x+hw && y>=f.y-hh && y<=f.y+hh);
+}
+
+// ── Healer factory ────────────────────────────────────────────────────────────
+function spawnHealer() {
+  if (healers.length >= 14) return;
+  const side = Math.floor(Math.random()*4);
+  let x, y;
+  if      (side===0) { x=60+Math.random()*(W-120); y=-55; }
+  else if (side===1) { x=W+55; y=60+Math.random()*(H-120); }
+  else if (side===2) { x=60+Math.random()*(W-120); y=H+55; }
+  else               { x=-55; y=60+Math.random()*(H-120); }
+  const isFemale = Math.random()<0.5;
+  healers.push({
+    x, y, gender: isFemale?'f':'m',
+    state: 'walking',          // walking|healing|confused|stunned|fleeing
+    speed: 1.8+Math.random()*1.4,
+    walkCycle: Math.random()*Math.PI*2,
+    stunTimer: 0, confusedTimer: 0, fleeVx: 0, fleeVy: 0,
+    alpha: 1, healTimer: 0, speechTimer: 0, speechText: '',
+    skin:  `hsl(${25+Math.random()*15},${50+Math.random()*20}%,${60+Math.random()*15}%)`,
+    hair:  isFemale?`hsl(${20+Math.random()*50},${55+Math.random()*30}%,${30+Math.random()*30}%)`
+                   :`hsl(${25+Math.random()*15},${10+Math.random()*25}%,${20+Math.random()*30}%)`,
+    shirt: `hsl(${Math.random()*360},${40+Math.random()*40}%,${35+Math.random()*25}%)`,
+    pants: `hsl(${200+Math.random()*40},${20+Math.random()*20}%,${18+Math.random()*15}%)`,
+    dress: `hsl(${Math.random()*360},${50+Math.random()*30}%,${38+Math.random()*20}%)`,
+    name:  isFemale?femaleNames[Math.floor(Math.random()*femaleNames.length)]:maleNames[Math.floor(Math.random()*maleNames.length)],
+  });
+}
+
+// ── Politician factory ────────────────────────────────────────────────────────
+function spawnPolitician() {
+  if (politician || politiciansAvailable <= 0) return;
+  politiciansAvailable--;
+  const x = Math.random()<0.5 ? -60 : W+60;
+  const y = 80+Math.random()*(H-160);
+  politician = {
+    x, y, hp: 4, maxHp: 4,
+    state: 'walking',   // walking|arguing|dead
+    walkCycle: 0, hitFlash: 0, alpha: 1,
+    speechTimer: 0, speechText: '',
+    argueTimer: 0, lastDx: 1,
+  };
+  updateShopUI();
+}
+
+function hitPolitician() {
+  if (!politician || politician.state==='dead') return;
+  politician.hp--;
+  politician.hitFlash = 18;
+  say(politician, polHitSpeech[Math.floor(Math.random()*polHitSpeech.length)]);
+  playHit();
+  if (politician.hp <= 0) {
+    politician.state = 'dead';
+    say(politician, 'Ich trete zurück!');
+    playPolDeath();
+  }
+}
+
+// ── Particle helpers ──────────────────────────────────────────────────────────
+function spawnHealParticle(fx, fy) {
+  const a = Math.atan2(timmy.y-fy, timmy.x-fx);
+  const spd = 1.8+Math.random()*2;
+  healParticles.push({ x:fx+(Math.random()-0.5)*18, y:fy+(Math.random()-0.5)*18, vx:Math.cos(a)*spd, vy:Math.sin(a)*spd-0.4, r:4+Math.random()*4, alpha:1, life:0.94 });
+}
+function spawnExplosionParticles(x, y) {
+  for(let i=0;i<180;i++){
+    const a=Math.random()*Math.PI*2,spd=2+Math.random()*12,sz=2+Math.random()*8;
+    const col=Math.random()<0.5?`hsl(${20+Math.random()*30},100%,${50+Math.random()*30}%)`:`hsl(${50+Math.random()*20},100%,${60+Math.random()*30}%)`;
+    particles.push({x,y,vx:Math.cos(a)*spd,vy:Math.sin(a)*spd,r:sz,color:col,alpha:1,life:0.98-Math.random()*0.02,gravity:0.18+Math.random()*0.12,smoke:false});
+  }
+  for(let i=0;i<40;i++){
+    const a=Math.random()*Math.PI*2,spd=0.5+Math.random()*3;
+    particles.push({x:x+(Math.random()-0.5)*40,y:y+(Math.random()-0.5)*20,vx:Math.cos(a)*spd,vy:Math.sin(a)*spd-1,r:12+Math.random()*20,color:`hsl(0,0%,${30+Math.random()*30}%)`,alpha:0.6,life:0.96-Math.random()*0.015,gravity:-0.05,smoke:true});
+  }
+}
+
+// ── UI update ────────────────────────────────────────────────────────────────
+function updateUI() {
+  chargeBar.style.width = charge+'%';
+  if (charge>=100) { chargeLabel.style.color='#ff4400'; chargeLabel.textContent='💥 KLICK!'; }
+  else             { chargeLabel.style.color='#ffcc00'; chargeLabel.textContent=`Ladung: ${Math.round(charge)}%`; }
+}
+function updateShopUI() {
+  statCoins.textContent = `🪙 ${coins}`;
+  const canFence = coins>=FENCE_COST && !placingFence && state==='swimming';
+  btnFence.disabled  = !canFence;
+  btnFence.classList.toggle('active', placingFence);
+
+  const canPol = politiciansAvailable>0 && !politician && state==='swimming';
+  btnPolitician.disabled = !canPol;
+  btnPolitician.textContent = `🎩 Politiker einsetzen (${politiciansAvailable} verfügbar)`;
+
+  placementHint.textContent = placingFence ? 'Klick auf die Spielfläche zum Platzieren · ESC zum Abbrechen' : '';
+}
+
+// ── Draw helpers ──────────────────────────────────────────────────────────────
+function drawWater() {
+  const grad=ctx.createLinearGradient(0,0,0,H);
+  grad.addColorStop(0,'#0d2035'); grad.addColorStop(1,'#061018');
+  ctx.fillStyle=grad; ctx.fillRect(0,0,W,H);
+  ctx.strokeStyle='#00cfff11'; ctx.lineWidth=1;
+  for(let i=0;i<6;i++){
+    const y=60+i*68+Math.sin(Date.now()/2000+i)*8;
+    ctx.beginPath();
+    for(let x=0;x<=W;x+=10){ const yy=y+Math.sin(x/60+Date.now()/1200+i)*5; x===0?ctx.moveTo(x,yy):ctx.lineTo(x,yy); }
+    ctx.stroke();
+  }
+}
+
+function drawFence(fx, fy, alpha=1) {
+  ctx.save();
+  ctx.globalAlpha = alpha;
+  const hw=FENCE_W/2, hh=FENCE_H/2;
+
+  // Poles
+  ctx.fillStyle='#aaa';
+  ctx.fillRect(fx-hw-3, fy-hh-6, 6, FENCE_H+15);
+  ctx.fillRect(fx+hw-3, fy-hh-6, 6, FENCE_H+15);
+
+  // Striped body (clipped)
+  ctx.save();
+  ctx.beginPath(); ctx.rect(fx-hw, fy-hh, FENCE_W, FENCE_H); ctx.clip();
+  ctx.fillStyle='#ff8800';
+  ctx.fillRect(fx-hw, fy-hh, FENCE_W, FENCE_H);
+  ctx.fillStyle='#111';
+  for(let i=-2; i<=Math.ceil(FENCE_W/14)+2; i++){
+    ctx.beginPath();
+    ctx.moveTo(fx-hw+i*14,    fy-hh);
+    ctx.lineTo(fx-hw+i*14+FENCE_H, fy+hh);
+    ctx.lineTo(fx-hw+i*14+FENCE_H+8, fy+hh);
+    ctx.lineTo(fx-hw+i*14+8, fy-hh);
+    ctx.closePath(); ctx.fill();
+  }
+  ctx.restore();
+
+  // Frame
+  ctx.strokeStyle='#cc6600'; ctx.lineWidth=1.5;
+  ctx.strokeRect(fx-hw, fy-hh, FENCE_W, FENCE_H);
+
+  // Feet
+  ctx.fillStyle='#777';
+  ctx.fillRect(fx-hw-8,  fy+hh+4, 22, 5);
+  ctx.fillRect(fx+hw-14, fy+hh+4, 22, 5);
+
+  ctx.restore();
+}
+
+function drawTimmy(x,y,angle,scale,blinking,healFlash) {
+  ctx.save();
+  ctx.translate(x,y); ctx.rotate(angle); ctx.scale(scale,scale);
+  ctx.beginPath(); ctx.ellipse(0,0,80,42,0,0,Math.PI*2); ctx.fillStyle=healFlash>0?'#44ff88':'#3399cc'; ctx.fill();
+  ctx.beginPath(); ctx.ellipse(10,10,45,25,0.2,0,Math.PI*2); ctx.fillStyle=healFlash>0?'#aaffcc':'#99ddff'; ctx.fill();
+  ctx.beginPath(); ctx.moveTo(-70,0); ctx.bezierCurveTo(-90,-30,-110,-25,-100,0); ctx.bezierCurveTo(-110,25,-90,30,-70,0); ctx.fillStyle='#2277aa'; ctx.fill();
+  ctx.beginPath(); ctx.moveTo(10,-40); ctx.bezierCurveTo(30,-75,50,-65,40,-40); ctx.fillStyle='#2277aa'; ctx.fill();
+  ctx.beginPath(); ctx.moveTo(20,15); ctx.bezierCurveTo(45,40,60,35,50,15); ctx.fillStyle='#2277aa'; ctx.fill();
+  ctx.beginPath(); ctx.arc(55,-10,8,0,Math.PI*2); ctx.fillStyle='#fff'; ctx.fill();
+  if(!blinking){ ctx.beginPath(); ctx.arc(57,-10,4,0,Math.PI*2); ctx.fillStyle='#111'; ctx.fill(); ctx.beginPath(); ctx.arc(59,-12,1.5,0,Math.PI*2); ctx.fillStyle='#fff'; ctx.fill(); }
+  else{ ctx.beginPath(); ctx.moveTo(49,-10); ctx.lineTo(63,-10); ctx.strokeStyle='#111'; ctx.lineWidth=2.5; ctx.stroke(); }
+  ctx.beginPath(); ctx.arc(60,5,12,0.1,Math.PI*0.9); ctx.strokeStyle='#1a5577'; ctx.lineWidth=2.5; ctx.stroke();
+  ctx.beginPath(); ctx.ellipse(20,-40,6,3,0,0,Math.PI*2); ctx.fillStyle='#2277aa'; ctx.fill();
+  ctx.restore();
+}
+
+function bubbleRect(x,y,w,h,r){
+  ctx.beginPath();
+  ctx.moveTo(x+r,y); ctx.lineTo(x+w-r,y); ctx.arcTo(x+w,y,x+w,y+r,r);
+  ctx.lineTo(x+w,y+h-r); ctx.arcTo(x+w,y+h,x+w-r,y+h,r);
+  ctx.lineTo(x+r,y+h); ctx.arcTo(x,y+h,x,y+h-r,r);
+  ctx.lineTo(x,y+r); ctx.arcTo(x,y,x+r,y,r);
+  ctx.closePath();
+}
+
+function drawSpeechBubble(npc, facing) {
+  if (npc.speechTimer <= 0) return;
+  ctx.save(); ctx.scale(1/(facing||1), 1);
+  const fade = Math.min(1, npc.speechTimer/18);
+  ctx.globalAlpha = (npc.alpha||1) * fade;
+  ctx.font='bold 9px sans-serif'; ctx.textAlign='center';
+  const tw=ctx.measureText(npc.speechText).width;
+  const bw=tw+14,bh=16,bx=-bw/2,by=-62;
+  ctx.fillStyle='rgba(255,255,255,0.93)'; bubbleRect(bx,by,bw,bh,4); ctx.fill();
+  ctx.beginPath(); ctx.moveTo(-4,by+bh); ctx.lineTo(0,by+bh+7); ctx.lineTo(4,by+bh);
+  ctx.fillStyle='rgba(255,255,255,0.93)'; ctx.fill();
+  ctx.fillStyle='#111'; ctx.fillText(npc.speechText,0,by+11.5);
+  ctx.restore();
+}
+
+function drawHealer(h) {
+  ctx.save();
+  ctx.translate(h.x, h.y);
+  ctx.globalAlpha = h.alpha;
+  const isMoving = h.state==='walking'||h.state==='fleeing'||h.state==='stunned';
+  const facing = h.state==='fleeing'?(h.x>timmy.x?1:-1):(h.x<timmy.x?1:-1);
+  ctx.scale(facing,1);
+  const wc=h.walkCycle, sw=isMoving?Math.sin(wc):0;
+
+  // shadow
+  ctx.beginPath(); ctx.ellipse(0,37,13,3,0,0,Math.PI*2); ctx.fillStyle='rgba(0,0,0,0.18)'; ctx.fill();
+
+  // legs
+  ctx.lineCap='round';
+  if(h.gender==='f'){
+    ctx.strokeStyle=h.skin; ctx.lineWidth=6;
+    ctx.beginPath(); ctx.moveTo(-6,20); ctx.lineTo(-6+sw*9,37); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(6,20);  ctx.lineTo(6-sw*9,37);  ctx.stroke();
+    ctx.fillStyle='#111';
+    ctx.beginPath(); ctx.ellipse(-6+sw*9,39,5,3,0,0,Math.PI*2); ctx.fill();
+    ctx.beginPath(); ctx.ellipse(6-sw*9, 39,5,3,0,0,Math.PI*2); ctx.fill();
+  } else {
+    ctx.fillStyle=h.pants;
+    ctx.save(); ctx.translate(-7,18); ctx.rotate(sw*0.38); ctx.fillRect(-4,0,8,19); ctx.restore();
+    ctx.save(); ctx.translate(7,18);  ctx.rotate(-sw*0.38); ctx.fillRect(-4,0,8,19); ctx.restore();
+    ctx.fillStyle='#111';
+    ctx.beginPath(); ctx.ellipse(-7+sw*6,37,6,3,0,0,Math.PI*2); ctx.fill();
+    ctx.beginPath(); ctx.ellipse(7-sw*6, 37,6,3,0,0,Math.PI*2); ctx.fill();
+  }
+
+  // body
+  if(h.gender==='f'){
+    ctx.fillStyle=h.dress; ctx.beginPath(); ctx.moveTo(-10,0); ctx.lineTo(10,0); ctx.lineTo(16,22); ctx.lineTo(-16,22); ctx.closePath(); ctx.fill();
+    ctx.fillStyle=h.shirt; ctx.beginPath(); ctx.moveTo(-8,0); ctx.lineTo(8,0); ctx.lineTo(5,7); ctx.lineTo(-5,7); ctx.closePath(); ctx.fill();
+  } else {
+    ctx.fillStyle=h.shirt; ctx.beginPath(); ctx.moveTo(-13,0); ctx.lineTo(13,0); ctx.lineTo(14,21); ctx.lineTo(-14,21); ctx.closePath(); ctx.fill();
+    ctx.beginPath(); ctx.arc(1,14,9,0,Math.PI*2); ctx.fill();
+    ctx.beginPath(); ctx.moveTo(-13,8); ctx.lineTo(13,8); ctx.strokeStyle='rgba(255,255,255,0.12)'; ctx.lineWidth=1.5; ctx.stroke();
+  }
+
+  // arms
+  ctx.strokeStyle=h.skin; ctx.lineWidth=5; ctx.lineCap='round';
+  if(h.state==='healing'){
+    const aw=Math.sin(Date.now()/180)*8;
+    ctx.beginPath(); ctx.moveTo(-11,4); ctx.lineTo(-23,-10+aw); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(11,4);  ctx.lineTo(23,-10-aw);  ctx.stroke();
+  } else if(h.state==='stunned'||h.state==='confused'){
+    ctx.beginPath(); ctx.moveTo(-11,4); ctx.lineTo(-21,12); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(11,4);  ctx.lineTo(21,12);  ctx.stroke();
+  } else {
+    const aw=isMoving?Math.sin(wc+Math.PI)*12:0;
+    ctx.beginPath(); ctx.moveTo(-11,4); ctx.lineTo(-21,15+aw); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(11,4);  ctx.lineTo(21,15-aw);  ctx.stroke();
+  }
+
+  // head
+  ctx.beginPath(); ctx.arc(0,-10,12,0,Math.PI*2); ctx.fillStyle=h.skin; ctx.fill();
+
+  // hair
+  if(h.gender==='f'){
+    ctx.fillStyle=h.hair;
+    ctx.beginPath(); ctx.arc(0,-17,12,Math.PI,0); ctx.fill();
+    ctx.beginPath(); ctx.arc(-13,-12,7,0,Math.PI*2); ctx.fill();
+    ctx.beginPath(); ctx.arc(13,-12,7,0,Math.PI*2); ctx.fill();
+    ctx.beginPath(); ctx.arc(-4,-23,6,0,Math.PI*2); ctx.fill();
+    ctx.beginPath(); ctx.arc(4,-23,6,0,Math.PI*2); ctx.fill();
+  } else {
+    ctx.fillStyle=h.hair;
+    ctx.beginPath(); ctx.arc(-11,-15,7,Math.PI*0.5,Math.PI*1.7); ctx.fill();
+    ctx.beginPath(); ctx.arc(11,-15,7,Math.PI*1.3,Math.PI*0.5);  ctx.fill();
+    ctx.beginPath(); ctx.arc(0,-21,3,0,Math.PI*2); ctx.fill();
+  }
+
+  // eyes
+  ctx.fillStyle='#1a1a1a';
+  ctx.beginPath(); ctx.arc(-4,-11,2.2,0,Math.PI*2); ctx.fill();
+  ctx.beginPath(); ctx.arc(4,-11,2.2,0,Math.PI*2);  ctx.fill();
+
+  if(glassWearers.has(h.name)){
+    ctx.strokeStyle='#444'; ctx.lineWidth=1.5;
+    ctx.beginPath(); ctx.arc(-4,-11,4.5,0,Math.PI*2); ctx.stroke();
+    ctx.beginPath(); ctx.arc(4,-11,4.5,0,Math.PI*2);  ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(0.5,-11); ctx.lineTo(-0.5,-11); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(-8.5,-10.5); ctx.lineTo(-12,-10); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(8.5,-10.5);  ctx.lineTo(12,-10);  ctx.stroke();
+  }
+
+  // mouth
+  ctx.lineWidth=1.8;
+  if(h.state==='confused'){
+    ctx.beginPath(); ctx.arc(0,-6,3,0,Math.PI*2); ctx.strokeStyle='#222'; ctx.stroke();
+  } else if(h.state==='healing'){
+    ctx.beginPath(); ctx.arc(0,-5,4.5,0.1,Math.PI-0.1); ctx.strokeStyle='#222'; ctx.stroke();
+  } else {
+    ctx.beginPath(); ctx.moveTo(-3,-5); ctx.lineTo(3,-5); ctx.strokeStyle='#222'; ctx.stroke();
+  }
+
+  // stunned stars
+  if(h.state==='stunned'||h.state==='confused'){
+    for(let i=0;i<3;i++){
+      const a=(Date.now()/170+i*Math.PI*2/3)%(Math.PI*2);
+      ctx.save(); ctx.translate(Math.cos(a)*17,-26+Math.sin(a)*5); ctx.scale(1/facing,1);
+      ctx.font='11px serif'; ctx.textAlign='center'; ctx.fillStyle='#ffe000'; ctx.fillText('★',0,4);
+      ctx.restore();
+    }
+  }
+
+  // healing icon
+  if(h.state==='healing'){
+    const bounce=Math.sin(Date.now()/240)*4;
+    ctx.save(); ctx.scale(1/facing,1); ctx.font='15px serif'; ctx.textAlign='center';
+    ctx.fillText('💚',0,-30+bounce); ctx.restore();
+  }
+
+  drawSpeechBubble(h, facing);
+
+  // name
+  ctx.save(); ctx.scale(1/facing,1); ctx.font='8px sans-serif'; ctx.textAlign='center';
+  ctx.fillStyle='rgba(200,230,255,0.50)'; ctx.fillText(h.name,0,-50); ctx.restore();
+
+  ctx.restore();
+}
+
+function drawPolitician(pol) {
+  ctx.save();
+  ctx.translate(pol.x, pol.y);
+  ctx.globalAlpha = pol.alpha;
+
+  const wc=pol.walkCycle, isHit=pol.hitFlash>0;
+  const facing=pol.lastDx>=0?1:-1;
+  ctx.scale(facing,1);
+  const sw=pol.state==='walking'?Math.sin(wc)*14:0;
+
+  // shadow
+  ctx.beginPath(); ctx.ellipse(0,54,14,3.5,0,0,Math.PI*2); ctx.fillStyle='rgba(0,0,0,0.18)'; ctx.fill();
+
+  // legs (long, thin)
+  ctx.fillStyle='#1c1c2e';
+  ctx.save(); ctx.translate(-6,26); ctx.rotate(sw*0.035); ctx.fillRect(-3,0,6,28); ctx.restore();
+  ctx.save(); ctx.translate(6,26);  ctx.rotate(-sw*0.035); ctx.fillRect(-3,0,6,28); ctx.restore();
+  ctx.fillStyle='#111';
+  ctx.beginPath(); ctx.ellipse(-6+sw*5,55,7,3.5,0,0,Math.PI*2); ctx.fill();
+  ctx.beginPath(); ctx.ellipse(6-sw*5, 55,7,3.5,0,0,Math.PI*2); ctx.fill();
+
+  // suit jacket
+  ctx.fillStyle=isHit?'#aa2222':'#1c1c2e';
+  ctx.beginPath(); ctx.moveTo(-10,0); ctx.lineTo(10,0); ctx.lineTo(11,28); ctx.lineTo(-11,28); ctx.closePath(); ctx.fill();
+  // white shirt
+  ctx.fillStyle='#e8e8e8';
+  ctx.beginPath(); ctx.moveTo(-4,0); ctx.lineTo(4,0); ctx.lineTo(2,12); ctx.lineTo(-2,12); ctx.closePath(); ctx.fill();
+  // tie
+  ctx.fillStyle='#8b0000';
+  ctx.beginPath(); ctx.moveTo(-2,0); ctx.lineTo(2,0); ctx.lineTo(2.5,20); ctx.lineTo(0,24); ctx.lineTo(-2.5,20); ctx.closePath(); ctx.fill();
+  // lapels
+  ctx.fillStyle='#1c1c2e';
+  ctx.beginPath(); ctx.moveTo(-10,0); ctx.lineTo(-4,0); ctx.lineTo(-1,15); ctx.lineTo(-10,12); ctx.closePath(); ctx.fill();
+  ctx.beginPath(); ctx.moveTo(10,0);  ctx.lineTo(4,0);  ctx.lineTo(1,15);  ctx.lineTo(10,12);  ctx.closePath(); ctx.fill();
+  // breast pocket
+  ctx.fillStyle='#eee';
+  ctx.fillRect(-9, 4, 6, 4);
+
+  // arms (long)
+  ctx.strokeStyle=isHit?'#ff6666':'#1c1c2e'; ctx.lineWidth=6; ctx.lineCap='round';
+  if(pol.state==='arguing'){
+    const aw=Math.sin(Date.now()/140)*9;
+    ctx.beginPath(); ctx.moveTo(-10,6); ctx.lineTo(-24,-6+aw); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(10,6);  ctx.lineTo(24,-6-aw);  ctx.stroke();
+    // hands
+    ctx.fillStyle=isHit?'#ffaaaa':'#f0c090';
+    ctx.beginPath(); ctx.arc(-24,-6+aw,4,0,Math.PI*2); ctx.fill();
+    ctx.beginPath(); ctx.arc(24,-6-aw, 4,0,Math.PI*2); ctx.fill();
+  } else {
+    ctx.beginPath(); ctx.moveTo(-10,6); ctx.lineTo(-24,22+sw*0.8); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(10,6);  ctx.lineTo(24,22-sw*0.8);  ctx.stroke();
+  }
+
+  // neck
+  ctx.fillStyle='#f0c090'; ctx.fillRect(-4,-8,8,10);
+
+  // head (elongated)
+  ctx.beginPath(); ctx.ellipse(0,-20,12,15,0,0,Math.PI*2); ctx.fillStyle='#f0c090'; ctx.fill();
+
+  // halbglatze: side hair only
+  ctx.fillStyle='#3a2a15';
+  ctx.beginPath(); ctx.arc(-11,-25,8,Math.PI*0.45,Math.PI*1.65); ctx.fill();
+  ctx.beginPath(); ctx.arc(11,-25,8,Math.PI*1.35,Math.PI*0.55);  ctx.fill();
+
+  // eyes (behind glasses)
+  ctx.fillStyle='#111';
+  ctx.beginPath(); ctx.arc(-4,-21,2,0,Math.PI*2); ctx.fill();
+  ctx.beginPath(); ctx.arc(4,-21,2,0,Math.PI*2);  ctx.fill();
+
+  // square politician glasses
+  ctx.strokeStyle='#222'; ctx.lineWidth=1.5;
+  ctx.strokeRect(-9.5,-26,9,8);
+  ctx.strokeRect(0.5,-26,9,8);
+  ctx.beginPath(); ctx.moveTo(0,-22); ctx.lineTo(0.5,-22); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(-9.5,-22); ctx.lineTo(-13,-21); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(9.5,-22);  ctx.lineTo(13,-21);  ctx.stroke();
+
+  // mouth
+  ctx.lineWidth=1.8;
+  if(pol.state==='arguing'){
+    ctx.beginPath(); ctx.arc(0,-14,4,0.15,Math.PI-0.15); ctx.strokeStyle='#333'; ctx.stroke();
+  } else {
+    ctx.beginPath(); ctx.moveTo(-3,-14); ctx.lineTo(3,-14); ctx.strokeStyle='#444'; ctx.stroke();
+  }
+
+  // HP indicator (heart dots above head)
+  for(let i=0;i<pol.maxHp;i++){
+    ctx.beginPath(); ctx.arc(-10+i*7,-42,3.5,0,Math.PI*2);
+    ctx.fillStyle = i<pol.hp ? '#ff4466' : '#333';
+    ctx.fill();
+  }
+
+  // speech bubble
+  drawSpeechBubble(pol, facing);
+
+  // name tag
+  ctx.save(); ctx.scale(1/facing,1); ctx.font='bold 8px sans-serif'; ctx.textAlign='center';
+  ctx.fillStyle='rgba(255,220,100,0.65)'; ctx.fillText('Politiker',0,-52); ctx.restore();
+
+  ctx.restore();
+}
+
+// ── Update healers ────────────────────────────────────────────────────────────
+function updateHealers() {
+  healers = healers.filter(h=>h.alpha>0.05);
+  for(const h of healers){
+    h.walkCycle += h.state==='fleeing'?0.22:0.1;
+    if(h.speechTimer>0) h.speechTimer--;
+
+    if(h.state==='walking'){
+      const dx=timmy.x-h.x, dy=timmy.y-h.y, dist=Math.sqrt(dx*dx+dy*dy);
+      if(dist<95){ h.state='healing'; say(h,healPhrases[Math.floor(Math.random()*healPhrases.length)]); }
+      else {
+        let spd=h.speed;
+        if(isInFence(h.x,h.y)) spd*=FENCE_SLOW;
+        h.x+=(dx/dist)*spd; h.y+=(dy/dist)*spd;
+      }
+    }
+
+    if(h.state==='healing'){
+      h.healTimer++;
+      if(h.healTimer%5===0){
+        charge=Math.max(0,charge-3.0); updateUI();
+        timmy.healFlash=8;
+        spawnHealParticle(h.x,h.y);
+        if(h.healTimer%30===0) playHealTick();
+      }
+      if(h.healTimer%140===0) say(h,healPhrases[Math.floor(Math.random()*healPhrases.length)]);
+      const dx=timmy.x-h.x, dy=timmy.y-h.y;
+      if(Math.sqrt(dx*dx+dy*dy)>125) h.state='walking';
+    }
+
+    if(h.state==='confused'){
+      // walk toward politician and hit them
+      if(politician && politician.state!=='dead'){
+        const dx=politician.x-h.x, dy=politician.y-h.y, d=Math.sqrt(dx*dx+dy*dy)||1;
+        if(d>45){ h.x+=(dx/d)*h.speed*0.6; h.y+=(dy/d)*h.speed*0.6; }
+        else {
+          h.confusedTimer--;
+          if(h.confusedTimer<=0){ hitPolitician(); h.state='walking'; h.confusedTimer=0; }
+        }
+      } else {
+        h.confusedTimer=0; h.state='walking';
+      }
+    }
+
+    if(h.state==='stunned'){
+      h.stunTimer--;
+      h.x+=h.fleeVx; h.y+=h.fleeVy;
+      h.fleeVx*=0.87; h.fleeVy*=0.87;
+      if(h.stunTimer<=0) h.state='fleeing';
+    }
+
+    if(h.state==='fleeing'){
+      const dx=h.x-timmy.x, dy=h.y-timmy.y, dist=Math.sqrt(dx*dx+dy*dy)||1;
+      let spd=h.speed*2.6;
+      if(isInFence(h.x,h.y)) spd*=FENCE_SLOW;
+      h.x+=(dx/dist)*spd; h.y+=(dy/dist)*spd;
+      if(h.x<-90||h.x>W+90||h.y<-90||h.y>H+90) h.alpha=0;
+    }
+  }
+}
+
+// ── Update politician ────────────────────────────────────────────────────────
+function updatePolitician() {
+  if(!politician) return;
+  const pol=politician;
+  pol.walkCycle+=0.1;
+  if(pol.hitFlash>0) pol.hitFlash--;
+  if(pol.speechTimer>0) pol.speechTimer--;
+
+  if(pol.state==='dead'){
+    pol.alpha-=0.013;
+    if(pol.alpha<=0) { politician=null; updateShopUI(); }
+    return;
+  }
+
+  if(pol.state==='walking'){
+    // Find nearest non-confused, non-fleeing healer
+    let nearest=null, nearDist=Infinity;
+    for(const h of healers){
+      if(h.state==='fleeing'||h.state==='stunned'||h.state==='confused') continue;
+      const d=Math.hypot(h.x-pol.x, h.y-pol.y);
+      if(d<nearDist){ nearDist=d; nearest=h; }
+    }
+    if(nearest && nearDist>80){
+      const dx=nearest.x-pol.x, dy=nearest.y-pol.y, d=Math.sqrt(dx*dx+dy*dy);
+      pol.lastDx=dx;
+      pol.x+=(dx/d)*1.3; pol.y+=(dy/d)*1.3;
+    } else if(nearest && nearDist<=80){
+      pol.state='arguing'; pol.argueTimer=100;
+      nearest.state='confused'; nearest.confusedTimer=70;
+      say(nearest, confusedTexts[Math.floor(Math.random()*confusedTexts.length)]);
+      say(pol, polSpeech[Math.floor(Math.random()*polSpeech.length)]);
+    } else {
+      // no target: walk toward center
+      const dx=W/2-pol.x, dy=H/2-pol.y, d=Math.hypot(dx,dy)||1;
+      if(d>60){ pol.lastDx=dx; pol.x+=(dx/d)*0.8; pol.y+=(dy/d)*0.8; }
+    }
+    if(Math.random()<0.004 && pol.speechTimer<=0) say(pol, polSpeech[Math.floor(Math.random()*polSpeech.length)]);
+  }
+
+  if(pol.state==='arguing'){
+    pol.argueTimer--;
+    if(pol.argueTimer<=0) pol.state='walking';
+  }
+
+  pol.x=Math.max(40, Math.min(W-40, pol.x));
+  pol.y=Math.max(40, Math.min(H-40, pol.y));
+}
+
+// ── Main update ───────────────────────────────────────────────────────────────
+function update() {
+  frameCount++;
+
+  if(state==='swimming'){
+    timmy.x+=timmy.vx; timmy.y+=timmy.vy;
+    timmy.angle=Math.atan2(timmy.vy,timmy.vx)*0.4;
+    if(timmy.x>W-90||timmy.x<90) timmy.vx*=-1;
+    if(timmy.y>H-60||timmy.y<60) timmy.vy*=-1;
+    timmy.blinkT++; if(timmy.blinkT>180+Math.random()*120) timmy.blinkT=0;
+    if(timmy.healFlash>0) timmy.healFlash--;
+    if(Math.random()<0.03) bubbles.push({x:timmy.x+15,y:timmy.y-45,r:3+Math.random()*6,vy:-(0.6+Math.random()),alpha:0.8,vx:(Math.random()-0.5)*0.4});
+
+    healerSpawnTimer++;
+    if(healerSpawnTimer>=healerSpawnInterval){
+      spawnHealer(); healerSpawnTimer=0;
+      wave=1+Math.floor(frameCount/1800);
+      healerSpawnInterval=Math.max(40,110-(wave-1)*15);
+      statWaveEl.textContent=`🌊 Welle ${wave}`;
+    }
+    updateHealers();
+    updatePolitician();
+  }
+
+  if(state==='exploding'){
+    shakeX=(Math.random()-0.5)*18; shakeY=(Math.random()-0.5)*18;
+    reformTimer++;
+    if(reformTimer>90){ state='reform'; reformTimer=0; timmy.scale=0.01; timmy.x=W/2; timmy.y=H/2; shakeX=0; shakeY=0; }
+  }
+
+  if(state==='reform'){
+    timmy.scale=Math.min(1,timmy.scale+0.02);
+    timmy.vx=0.9+Math.random()*0.4; timmy.vy=(Math.random()-0.5)*0.6;
+    if(timmy.scale>=1){ state='swimming'; charge=0; updateUI(); updateShopUI(); }
+  }
+
+  particles=particles.filter(p=>p.alpha>0.02);
+  particles.forEach(p=>{ p.x+=p.vx; p.y+=p.vy; p.vy+=p.gravity; p.vx*=0.98; p.alpha*=p.life; });
+
+  healParticles=healParticles.filter(p=>p.alpha>0.05);
+  healParticles.forEach(p=>{ p.x+=p.vx; p.y+=p.vy; p.vy-=0.05; p.alpha*=p.life; p.r*=0.97; });
+
+  bubbles=bubbles.filter(b=>b.alpha>0.05);
+  bubbles.forEach(b=>{ b.y+=b.vy; b.x+=b.vx+Math.sin(Date.now()/400+b.r)*0.3; b.alpha*=0.985; });
+
+  clickFlashes=clickFlashes.filter(f=>f.alpha>0.05);
+  clickFlashes.forEach(f=>{ f.r+=2; f.alpha*=0.85; });
+
+  if(msgAlpha>0){ msgAlpha-=0.012; msgEl.style.opacity=Math.max(0,msgAlpha); }
+}
+
+// ── Draw ──────────────────────────────────────────────────────────────────────
+function draw() {
+  ctx.save();
+  if(state==='exploding') ctx.translate(shakeX,shakeY);
+
+  drawWater();
+
+  // fences (behind everything)
+  fences.forEach(f=>drawFence(f.x,f.y));
+
+  // fence placement preview
+  if(placingFence && mouseX>0){
+    drawFence(mouseX, mouseY, 0.5);
+    ctx.save();
+    ctx.strokeStyle='rgba(255,200,50,0.7)';
+    ctx.lineWidth=1; ctx.setLineDash([4,4]);
+    ctx.strokeRect(mouseX-FENCE_W/2-FENCE_PAD, mouseY-FENCE_H/2-FENCE_PAD,
+                   FENCE_W+FENCE_PAD*2, FENCE_H+FENCE_PAD*2);
+    ctx.restore();
+  }
+
+  bubbles.forEach(b=>{
+    ctx.beginPath(); ctx.arc(b.x,b.y,b.r,0,Math.PI*2);
+    ctx.strokeStyle=`rgba(150,220,255,${b.alpha})`; ctx.lineWidth=1.5; ctx.stroke();
+  });
+
+  particles.filter(p=>p.smoke).forEach(p=>{
+    ctx.beginPath(); ctx.arc(p.x,p.y,p.r,0,Math.PI*2);
+    ctx.fillStyle=p.color.replace('hsl(','hsla(').replace(')',`,${p.alpha})`); ctx.fill();
+  });
+
+  healParticles.forEach(p=>{
+    ctx.beginPath(); ctx.arc(p.x,p.y,p.r,0,Math.PI*2);
+    ctx.fillStyle=`rgba(50,255,130,${p.alpha})`; ctx.fill();
+  });
+
+  healers.forEach(h=>drawHealer(h));
+  if(politician) drawPolitician(politician);
+
+  if(state!=='exploding'){
+    const blink=timmy.blinkT>165&&timmy.blinkT<172;
+    drawTimmy(timmy.x,timmy.y,timmy.angle,timmy.scale,blink,timmy.healFlash);
+  }
+
+  particles.filter(p=>!p.smoke).forEach(p=>{
+    ctx.beginPath(); ctx.arc(p.x,p.y,p.r,0,Math.PI*2);
+    ctx.fillStyle=p.color.replace('hsl(','hsla(').replace(')',`,${p.alpha})`); ctx.fill();
+  });
+
+  clickFlashes.forEach(f=>{
+    const g=ctx.createRadialGradient(f.x,f.y,0,f.x,f.y,f.r);
+    g.addColorStop(0,`rgba(255,200,50,${f.alpha})`); g.addColorStop(1,'rgba(255,80,0,0)');
+    ctx.beginPath(); ctx.arc(f.x,f.y,f.r,0,Math.PI*2); ctx.fillStyle=g; ctx.fill();
+  });
+
+  if(charge>0&&state==='swimming'){
+    const glow=ctx.createRadialGradient(timmy.x,timmy.y,40,timmy.x,timmy.y,110);
+    const a=(charge/100)*0.5, hue=20+charge*1.2;
+    glow.addColorStop(0,`hsla(${hue},100%,50%,${a})`);
+    glow.addColorStop(1,`hsla(${hue},100%,50%,0)`);
+    ctx.beginPath(); ctx.arc(timmy.x,timmy.y,110,0,Math.PI*2); ctx.fillStyle=glow; ctx.fill();
+  }
+
+  ctx.restore();
+}
+
+// ── Explode ───────────────────────────────────────────────────────────────────
+function explode() {
+  if(state!=='swimming') return;
+  state='exploding'; reformTimer=0;
+  explosions++;
+  statExp.textContent=`💥 ${explosions}`;
+  spawnExplosionParticles(timmy.x,timmy.y);
+  playExplosion(); msgAlpha=1.2;
+  charge=0; updateUI();
+
+  // currency
+  coins+=COINS_PER_EXPLOSION;
+
+  // politician unlock
+  if(explosions%POL_EVERY_N===0){
+    politiciansAvailable++;
+  }
+
+  updateShopUI();
+
+  // scatter healers
+  healers.forEach(h=>{
+    if(h.state==='fleeing') return;
+    const dx=h.x-timmy.x, dy=h.y-timmy.y, d=Math.sqrt(dx*dx+dy*dy)||1;
+    h.state='stunned'; h.stunTimer=35;
+    h.fleeVx=(dx/d)*12; h.fleeVy=(dy/d)*12;
+    say(h,stunPhrases[Math.floor(Math.random()*stunPhrases.length)]);
+  });
+}
+
+// ── Input ─────────────────────────────────────────────────────────────────────
+let holdingTimmy=false, holdInterval=null;
+
+function getCanvasPos(e) {
+  const rect=canvas.getBoundingClientRect();
+  return { x:(e.clientX-rect.left)*(W/rect.width), y:(e.clientY-rect.top)*(H/rect.height) };
+}
+
+canvas.addEventListener('mousemove', e=>{
+  const p=getCanvasPos(e); mouseX=p.x; mouseY=p.y;
+});
+
+canvas.addEventListener('mousedown', e=>{
+  if(audio.state==='suspended') audio.resume();
+
+  const {x:mx,y:my}=getCanvasPos(e);
+
+  // fence placement mode
+  if(placingFence){
+    fences.push({x:mx,y:my});
+    coins-=FENCE_COST;
+    placingFence=false;
+    canvas.style.cursor='crosshair';
+    updateShopUI();
+    return;
+  }
+
+  if(state!=='swimming') return;
+
+  // healer hit check
+  for(const h of healers){
+    if(h.state==='stunned'||h.state==='fleeing'||h.state==='confused') continue;
+    if(Math.abs(mx-h.x)<22&&Math.abs(my-h.y)<42){
+      const dx=h.x-timmy.x, dy=h.y-timmy.y, d=Math.sqrt(dx*dx+dy*dy)||1;
+      h.state='stunned'; h.stunTimer=45;
+      h.fleeVx=(dx/d)*5+(Math.random()-0.5)*3;
+      h.fleeVy=(dy/d)*5+(Math.random()-0.5)*3;
+      say(h,stunPhrases[Math.floor(Math.random()*stunPhrases.length)]);
+      clickFlashes.push({x:mx,y:my,r:8,alpha:1});
+      playStun();
+      healersKicked++; statHeal.textContent=`🏃 ${healersKicked} weggejagt`;
+      return;
+    }
+  }
+
+  // politician click (stun nearby healer — help protect him)
+  if(politician&&politician.state!=='dead'){
+    const dxp=mx-politician.x, dyp=my-politician.y;
+    if(Math.abs(dxp)<20&&Math.abs(dyp)<55){
+      // clicking on politician does nothing — just ignore to avoid confusion
+      return;
+    }
+  }
+
+  // timmy hit
+  const dx=mx-timmy.x, dy=my-timmy.y;
+  const hit=(dx*dx)/(90*90)+(dy*dy)/(50*50)<1;
+  if(hit||charge>=100){
+    holdingTimmy=true;
+    if(charge>=100){ explode(); return; }
+    charge=Math.min(100,charge+(8+Math.random()*5));
+    clickFlashes.push({x:mx,y:my,r:8,alpha:1});
+    timmy.vx+=(Math.random()-0.5)*1.5; timmy.vy+=(Math.random()-0.5)*1.5;
+    playClick(); updateUI();
+    if(charge>=100) explode();
+  }
+  holdInterval=setInterval(()=>{
+    if(!holdingTimmy||state!=='swimming'||charge>=100) return;
+    charge=Math.min(100,charge+1.5); updateUI();
+  },30);
+});
+
+canvas.addEventListener('mouseup',  ()=>{ clearInterval(holdInterval); holdingTimmy=false; });
+canvas.addEventListener('mouseleave',()=>{ clearInterval(holdInterval); holdingTimmy=false; });
+
+document.addEventListener('keydown', e=>{
+  if(e.key==='Escape'&&placingFence){
+    placingFence=false; canvas.style.cursor='crosshair'; updateShopUI();
+  }
+});
+
+// Shop buttons
+btnFence.addEventListener('click',()=>{
+  if(coins<FENCE_COST||state!=='swimming') return;
+  placingFence=true;
+  canvas.style.cursor='cell';
+  updateShopUI();
+});
+
+btnPolitician.addEventListener('click',()=>{
+  if(politiciansAvailable<=0||politician||state!=='swimming') return;
+  spawnPolitician();
+});
+
+// ── Game loop ────────────────────────────────────────────────────────────────
+spawnHealer(); spawnHealer(); spawnHealer();
+(function loop(){ update(); draw(); requestAnimationFrame(loop); })();
+</script>
+</body>
+</html>
