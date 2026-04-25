@@ -40,9 +40,51 @@
       text-shadow: 0 0 30px #ff4400, 0 0 60px #ff4400;
       pointer-events: none; opacity: 0; white-space: nowrap;
     }
+    #diff-screen {
+      position: fixed; inset: 0; background: #0a0a1a;
+      display: flex; flex-direction: column; align-items: center; justify-content: center;
+      gap: 28px; z-index: 100;
+    }
+    #diff-screen h2 { color: #00cfff; font-size: 1.4rem; letter-spacing: 3px; text-shadow: 0 0 20px #00cfff88; }
+    #diff-screen p  { color: #556; font-size: 0.75rem; letter-spacing: 1px; }
+    .diff-btns { display: flex; gap: 18px; }
+    .diff-btn {
+      background: #0d1a2a; border-radius: 10px; padding: 20px 32px;
+      cursor: pointer; border: 2px solid; transition: transform 0.1s, box-shadow 0.1s;
+      font-family: 'Courier New', monospace; text-align: center; min-width: 150px;
+    }
+    .diff-btn:hover { transform: scale(1.06); box-shadow: 0 0 24px currentColor; }
+    .diff-btn .diff-icon  { font-size: 2rem; display: block; margin-bottom: 6px; }
+    .diff-btn .diff-label { font-size: 1rem; font-weight: bold; display: block; margin-bottom: 4px; }
+    .diff-btn .diff-desc  { font-size: 0.65rem; color: #889; display: block; line-height: 1.5; }
+    .diff-btn.easy   { border-color: #44dd88; color: #44dd88; }
+    .diff-btn.medium { border-color: #ffcc00; color: #ffcc00; }
+    .diff-btn.hard   { border-color: #ff4400; color: #ff4400; }
   </style>
 </head>
 <body>
+  <div id="diff-screen">
+    <h2>🐋 TIMMY DEN WAL SPRENGEN</h2>
+    <p>SCHWIERIGKEITSGRAD WÄHLEN</p>
+    <div class="diff-btns">
+      <button class="diff-btn easy"   data-diff="easy">
+        <span class="diff-icon">🌊</span>
+        <span class="diff-label">Leicht</span>
+        <span class="diff-desc">Timmy ist langsam<br>Wenig Heiler<br>Schnelles Laden</span>
+      </button>
+      <button class="diff-btn medium" data-diff="medium">
+        <span class="diff-icon">💥</span>
+        <span class="diff-label">Mittel</span>
+        <span class="diff-desc">Ausgewogen<br>Klassisches Spiel<br>Faire Herausforderung</span>
+      </button>
+      <button class="diff-btn hard"   data-diff="hard">
+        <span class="diff-icon">☠️</span>
+        <span class="diff-label">Schwer</span>
+        <span class="diff-desc">Timmy rast<br>Heiler-Flut<br>Ladung fällt schnell</span>
+      </button>
+    </div>
+  </div>
+
   <h1>🐋 TIMMY DEN WAL SPRENGEN</h1>
   <canvas id="canvas" width="720" height="410"></canvas>
   <div id="ui">
@@ -78,13 +120,21 @@ const msgEl          = document.getElementById('msg');
 
 const W = canvas.width, H = canvas.height;
 
+// ── Difficulty config ────────────────────────────────────────────────────────
+const DIFFICULTIES = {
+  easy:   { timmySpeed:1.1, spawnInterval:160, maxHealers:8,  healerSpeed:[1.2,0.8], healDrain:1.8, clickCharge:[12,6], holdRate:2.5, label:'Leicht' },
+  medium: { timmySpeed:1.6, spawnInterval:110, maxHealers:14, healerSpeed:[1.8,1.4], healDrain:3.0, clickCharge:[8,5],  holdRate:1.5, label:'Mittel' },
+  hard:   { timmySpeed:2.5, spawnInterval:65,  maxHealers:22, healerSpeed:[2.6,2.0], healDrain:5.5, clickCharge:[5,3],  holdRate:0.9, label:'Schwer' },
+};
+let cfg = null;
+
 // ── Core state ──────────────────────────────────────────────────────────────
 let charge = 0, state = 'swimming';
 let explosions = 0, healersKicked = 0, wave = 1;
 let coins = 0;
 const COINS_PER_EXPLOSION = 3;
 const FENCE_COST = 10;
-const POL_EVERY_N  = 10; // politician every N explosions
+const POL_EVERY_N  = 10;
 
 // Arrays
 let particles = [], healParticles = [], bubbles = [], clickFlashes = [];
@@ -94,7 +144,7 @@ let politician = null;
 let politiciansAvailable = 0;
 
 let shakeX = 0, shakeY = 0, msgAlpha = 0, reformTimer = 0, frameCount = 0;
-let healerSpawnTimer = 0, healerSpawnInterval = 110;
+let healerSpawnTimer = 0, healerSpawnInterval = 110; // overwritten on start
 
 // Placement mode
 let placingFence = false;
@@ -105,6 +155,7 @@ const FENCE_SLOW = 0.28;
 
 // ── Timmy ───────────────────────────────────────────────────────────────────
 const timmy = { x: W/2, y: H/2, vx: 1.6, vy: 0.7, angle: 0, scale: 1, blinkT: 0, healFlash: 0 };
+let gameStarted = false;
 
 // ── Audio ────────────────────────────────────────────────────────────────────
 const audio = new (window.AudioContext || window.webkitAudioContext)();
@@ -154,7 +205,7 @@ function isInFence(x, y) {
 
 // ── Healer factory ────────────────────────────────────────────────────────────
 function spawnHealer() {
-  if (healers.length >= 14) return;
+  if (healers.length >= cfg.maxHealers) return;
   const side = Math.floor(Math.random()*4);
   let x, y;
   if      (side===0) { x=60+Math.random()*(W-120); y=-55; }
@@ -165,7 +216,7 @@ function spawnHealer() {
   healers.push({
     x, y, gender: isFemale?'f':'m',
     state: 'walking',          // walking|healing|confused|stunned|fleeing
-    speed: 1.8+Math.random()*1.4,
+    speed: cfg.healerSpeed[0]+Math.random()*cfg.healerSpeed[1],
     walkCycle: Math.random()*Math.PI*2,
     stunTimer: 0, confusedTimer: 0, fleeVx: 0, fleeVy: 0,
     alpha: 1, healTimer: 0, speechTimer: 0, speechText: '',
@@ -582,7 +633,7 @@ function updateHealers() {
     if(h.state==='healing'){
       h.healTimer++;
       if(h.healTimer%5===0){
-        charge=Math.max(0,charge-3.0); updateUI();
+        charge=Math.max(0,charge-cfg.healDrain); updateUI();
         timmy.healFlash=8;
         spawnHealParticle(h.x,h.y);
         if(h.healTimer%30===0) playHealTick();
@@ -688,7 +739,7 @@ function update() {
     if(healerSpawnTimer>=healerSpawnInterval){
       spawnHealer(); healerSpawnTimer=0;
       wave=1+Math.floor(frameCount/1800);
-      healerSpawnInterval=Math.max(40,110-(wave-1)*15);
+      healerSpawnInterval=Math.max(40,cfg.spawnInterval-(wave-1)*15);
       statWaveEl.textContent=`🌊 Welle ${wave}`;
     }
     updateHealers();
@@ -878,7 +929,7 @@ canvas.addEventListener('mousedown', e=>{
   if(hit||charge>=100){
     holdingTimmy=true;
     if(charge>=100){ explode(); return; }
-    charge=Math.min(100,charge+(8+Math.random()*5));
+    charge=Math.min(100,charge+(cfg.clickCharge[0]+Math.random()*cfg.clickCharge[1]));
     clickFlashes.push({x:mx,y:my,r:8,alpha:1});
     timmy.vx+=(Math.random()-0.5)*1.5; timmy.vy+=(Math.random()-0.5)*1.5;
     playClick(); updateUI();
@@ -886,7 +937,7 @@ canvas.addEventListener('mousedown', e=>{
   }
   holdInterval=setInterval(()=>{
     if(!holdingTimmy||state!=='swimming'||charge>=100) return;
-    charge=Math.min(100,charge+1.5); updateUI();
+    charge=Math.min(100,charge+cfg.holdRate); updateUI();
   },30);
 });
 
@@ -912,9 +963,22 @@ btnPolitician.addEventListener('click',()=>{
   spawnPolitician();
 });
 
+// ── Difficulty screen ────────────────────────────────────────────────────────
+const diffScreen = document.getElementById('diff-screen');
+document.querySelectorAll('.diff-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    cfg = DIFFICULTIES[btn.dataset.diff];
+    healerSpawnInterval = cfg.spawnInterval;
+    timmy.vx = cfg.timmySpeed;
+    timmy.vy = cfg.timmySpeed * 0.44;
+    diffScreen.style.display = 'none';
+    spawnHealer(); spawnHealer(); spawnHealer();
+    gameStarted = true;
+  });
+});
+
 // ── Game loop ────────────────────────────────────────────────────────────────
-spawnHealer(); spawnHealer(); spawnHealer();
-(function loop(){ update(); draw(); requestAnimationFrame(loop); })();
+(function loop(){ if(gameStarted){ update(); draw(); } requestAnimationFrame(loop); })();
 </script>
 </body>
 </html>
