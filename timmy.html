@@ -2,6 +2,7 @@
 <html lang="de">
 <head>
   <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
   <title>Timmy den Wal sprengen 💥</title>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -17,7 +18,17 @@
       user-select: none;
     }
     h1 { color: #00cfff; font-size: 1.8rem; margin-bottom: 10px; text-shadow: 0 0 20px #00cfff88; letter-spacing: 2px; }
-    #canvas { border: 2px solid #00cfff44; border-radius: 16px; cursor: crosshair; box-shadow: 0 0 40px #00cfff22; }
+    #canvas { border: 2px solid #00cfff44; border-radius: 16px; cursor: crosshair; box-shadow: 0 0 40px #00cfff22; max-width: 100%; touch-action: none; }
+    #game-wrap { display: flex; flex-direction: column; align-items: center; width: 100%; max-width: 724px; padding: 0 6px; }
+    @media (max-width: 740px) {
+      h1 { font-size: 1.1rem; margin-bottom: 6px; }
+      #canvas { width: 100%; height: auto; }
+      .shop-btn { padding: 8px 14px; font-size: 0.8rem; }
+      #stats { font-size: 0.72rem; gap: 10px; flex-wrap: wrap; justify-content: center; }
+      #shop { gap: 8px; }
+      .diff-btns { flex-direction: column; gap: 10px; }
+      .diff-btn { min-width: 220px; padding: 14px 24px; }
+    }
     #ui { margin-top: 12px; display: flex; align-items: center; gap: 20px; }
     #charge-bar-wrap { width: 260px; height: 20px; background: #111; border: 2px solid #ff4400aa; border-radius: 10px; overflow: hidden; }
     #charge-bar { height: 100%; width: 0%; background: linear-gradient(90deg,#ff4400,#ffcc00); border-radius: 10px; transition: width 0.05s; box-shadow: 0 0 8px #ff4400; }
@@ -85,6 +96,7 @@
     </div>
   </div>
 
+  <div id="game-wrap">
   <h1>🐋 TIMMY DEN WAL SPRENGEN</h1>
   <canvas id="canvas" width="720" height="410"></canvas>
   <div id="ui">
@@ -103,6 +115,7 @@
   </div>
   <div id="placement-hint"></div>
   <div id="msg">💥 BOOM! 💥</div>
+  </div>
 
 <script>
 const canvas   = document.getElementById('canvas');
@@ -943,6 +956,15 @@ canvas.addEventListener('mousedown', e=>{
 
 canvas.addEventListener('mouseup',  ()=>{ clearInterval(holdInterval); holdingTimmy=false; });
 canvas.addEventListener('mouseleave',()=>{ clearInterval(holdInterval); holdingTimmy=false; });
+
+// ── Touch events (mobile) ─────────────────────────────────────────────────
+function touchPos(e) {
+  const t = e.touches[0] || e.changedTouches[0];
+  return getCanvasPos(t);
+}
+canvas.addEventListener('touchstart', e=>{ e.preventDefault(); canvas.dispatchEvent(new MouseEvent('mousedown', { clientX: e.touches[0].clientX, clientY: e.touches[0].clientY })); }, { passive: false });
+canvas.addEventListener('touchmove',  e=>{ e.preventDefault(); const p=touchPos(e); mouseX=p.x; mouseY=p.y; }, { passive: false });
+canvas.addEventListener('touchend',   e=>{ e.preventDefault(); clearInterval(holdInterval); holdingTimmy=false; }, { passive: false });
 
 document.addEventListener('keydown', e=>{
   if(e.key==='Escape'&&placingFence){
